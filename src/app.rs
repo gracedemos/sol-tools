@@ -1,11 +1,15 @@
 use serde_json::Value;
 use eframe::egui;
 use tokio::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 #[derive(Default)]
 pub struct App {
     helius_api_key: String,
-    transactions: Vec<Value>,
+    transactions: Arc<Mutex<Vec<Value>>>,
+    transactions_len: usize,
+    getting_txns: Arc<Mutex<bool>>,
     connections: Vec<Value>,
     active_txn: Option<Value>,
     search_sig: String,
@@ -62,53 +66,80 @@ fn get_transactions_ui(app: &mut App, ui: &mut egui::Ui) {
             ui.end_row();
         });
 
-    if ui.button("Get Transactions").clicked() {
-        if let Ok(txns) = get_transactions(app, None) {
-            let mut last_txn = String::from(
-                txns[txns.len() - 1].get("signature")
-                    .unwrap()
-                    .as_str()
-                    .unwrap()
-            );
+    ui.horizontal(|ui| {
+        if ui.button("Get Transactions").clicked() {
+            let address = app.address.clone();
+            let api_key = app.helius_api_key.clone();
+            let txns_clone = app.transactions.clone();
+            let getting_txns = app.getting_txns.clone();
 
-            app.transactions = txns;
+            *getting_txns.lock().unwrap() = true;
 
-            while let Ok(mut txns) = get_transactions(app, Some(last_txn.clone())) {
-                if txns.len() < 1 {
-                    break;
+            let _ = thread::spawn(move || {
+                if let Ok(txns) = get_transactions(&address, &api_key, None) {
+                    let mut last_txn = String::from(
+                        txns[txns.len() - 1].get("signature")
+                            .unwrap()
+                            .as_str()
+                            .unwrap()
+                    );
+
+                    *txns_clone.lock().unwrap() = txns;
+
+                    while let Ok(mut txns) = get_transactions(&address, &api_key, Some(last_txn.clone())) {
+                        if txns.len() < 1 {
+                            break;
+                        }
+
+                        last_txn = String::from(
+                            txns[txns.len() - 1].get("signature")
+                                .unwrap()
+                                .as_str()
+                                .unwrap()
+                        );
+
+                        txns_clone.lock()
+                            .unwrap()
+                            .append(&mut txns);
+                    }
                 }
 
-                last_txn = String::from(
-                    txns[txns.len() - 1].get("signature")
-                        .unwrap()
-                        .as_str()
-                        .unwrap()
-                );
-
-                app.transactions.append(&mut txns);
-            }
+                *getting_txns.lock().unwrap() = false;
+            });
         }
-    }
+
+        if *app.getting_txns.lock().unwrap() {
+            ui.spinner();
+        }
+    });
 
     ui.separator();
-    ui.label(format!("Retrieved {} Transactions", app.transactions.len()));
+
+    if let Ok(txns_lock) = app.transactions.try_lock() {
+        app.transactions_len = txns_lock.len();
+    } 
+
+    ui.label(format!("Retrieved {} Transactions", app.transactions_len));
+
     ui.separator();
     egui::CollapsingHeader::new("Transactions").show(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.separator();
 
-            for txn in &app.transactions {
-                let sig = txn.get("signature")
-                    .unwrap()
-                    .as_str()
-                    .unwrap();
+            if let Ok(txns_lock) = app.transactions.try_lock() {
+                for txn in txns_lock.iter() {
+                    let sig = txn.get("signature")
+                        .unwrap()
+                        .as_str()
+                        .unwrap();
 
-                if ui.label(sig).clicked() {
-                    app.active_txn = Some(txn.clone());
-                    app.tab = Tab::ActiveTransaction;
+                    if ui.label(sig).clicked() {
+                        app.active_txn = Some(txn.clone());
+                        app.tab = Tab::ActiveTransaction;
+                    }
+
+                    ui.separator();
                 }
-
-                ui.separator();
             }
         });
     });
@@ -214,7 +245,7 @@ fn find_connections_ui(app: &mut App, ui: &mut egui::Ui) {
 fn find_connections(app: &mut App) {
     app.connections = Vec::new();
 
-    for txn in &app.transactions {
+    for txn in app.transactions.lock().unwrap().iter() {
         let account_data = txn.get("accountData").unwrap();
         let accounts: Vec<&str> = account_data.as_array()
             .unwrap()
@@ -234,9 +265,9 @@ fn find_connections(app: &mut App) {
     }
 }
 
-fn get_transactions(app: &mut App, before: Option<String>) -> Result<Vec<Value>, serde_json::Error> {
+fn get_transactions(address: &str, api_key: &str, before: Option<String>) -> Result<Vec<Value>, serde_json::Error> {
     let (tx, mut rx) = mpsc::channel(1);
-    let mut url = format!("https://api.helius.xyz/v0/addresses/{}/transactions?api-key={}", app.address, app.helius_api_key);
+    let mut url = format!("https://api.helius.xyz/v0/addresses/{}/transactions?api-key={}", address, api_key);
     
     if let Some(before) = before {
         url += format!("&before={before}").as_str();
