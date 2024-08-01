@@ -15,7 +15,8 @@ pub struct App {
     search_sig: String,
     tab: Tab,
     address: String,
-    second_address: String
+    second_address: String,
+    explorer: Explorer
 }
 
 #[derive(PartialEq)]
@@ -23,12 +24,25 @@ enum Tab {
     GetTransactions,
     Search,
     ActiveTransaction,
-    FindConnections
+    FindConnections,
+    Settings
+}
+
+#[derive(PartialEq)]
+enum Explorer {
+    Solscan,
+    SolanaFM
 }
 
 impl Default for Tab {
     fn default() -> Self {
         Tab::GetTransactions
+    }
+}
+
+impl Default for Explorer {
+    fn default() -> Self {
+        Explorer::SolanaFM
     }
 }
 
@@ -40,6 +54,7 @@ impl eframe::App for App {
                 ui.selectable_value(&mut self.tab, Tab::Search, "Search");
                 ui.selectable_value(&mut self.tab, Tab::ActiveTransaction, "Transaction");
                 ui.selectable_value(&mut self.tab, Tab::FindConnections, "Find Connections");
+                ui.selectable_value(&mut self.tab, Tab::Settings, "Settings");
             });
             ui.separator();
 
@@ -47,7 +62,8 @@ impl eframe::App for App {
                 Tab::GetTransactions => get_transactions_ui(self, ui),
                 Tab::Search => search_ui(self, ui),
                 Tab::ActiveTransaction => active_transaction_ui(self, ui),
-                Tab::FindConnections => find_connections_ui(self, ui)
+                Tab::FindConnections => find_connections_ui(self, ui),
+                Tab::Settings => settings_ui(self, ui)
             }
         });
     }
@@ -162,6 +178,25 @@ fn search_ui(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
+fn settings_ui(app: &mut App, ui: &mut egui::Ui) {
+    let selection = match app.explorer {
+        Explorer::Solscan => "Solscan",
+        Explorer::SolanaFM => "SolanaFM"
+    };
+
+    egui::Grid::new("settings-grid")
+        .num_columns(2)
+        .show(ui, |ui| {
+            ui.label("Transaction Explorer");
+            egui::ComboBox::from_label("")
+                .selected_text(selection)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut app.explorer, Explorer::SolanaFM, "SolanaFM");
+                    ui.selectable_value(&mut app.explorer, Explorer::Solscan, "Solscan");
+                });
+        });
+}
+
 fn active_transaction_ui(app: &mut App, ui: &mut egui::Ui) {
     if let None = app.active_txn {
         return;
@@ -193,6 +228,8 @@ fn active_transaction_ui(app: &mut App, ui: &mut egui::Ui) {
     ui.label(format!("Signature: {sig}"));
     ui.label(format!("Signer SOL Balance Change: {}", lamports_to_sol(sol_bal_change)));
 
+    explorer_link(app, ui, sig);
+
     ui.separator();
     ui.heading("Accounts");
     ui.separator();
@@ -202,6 +239,17 @@ fn active_transaction_ui(app: &mut App, ui: &mut egui::Ui) {
             ui.label(account);
         }
     });
+}
+
+fn explorer_link(app: &App, ui: &mut egui::Ui, sig: &str) {
+    match app.explorer {
+        Explorer::SolanaFM => {
+            ui.hyperlink_to("SolanaFM", format!("https://solana.fm/tx/{}?cluster=mainnet-alpha", sig));
+        },
+        Explorer::Solscan => {
+            ui.hyperlink_to("Solscan", format!("https://solscan.io/tx/{}", sig));
+        }
+    }
 }
 
 fn find_connections_ui(app: &mut App, ui: &mut egui::Ui) {
